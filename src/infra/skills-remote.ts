@@ -5,6 +5,7 @@ import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
 type RemoteNodeRecord = {
@@ -18,8 +19,23 @@ type RemoteNodeRecord = {
 };
 
 const log = createSubsystemLogger("gateway/skills-remote");
-const remoteNodes = new Map<string, RemoteNodeRecord>();
-let remoteRegistry: NodeRegistry | null = null;
+
+// Use globalThis-based singletons so all dist bundles (gateway, discord,
+// reply-runtime) share the same remote node state. Without this, each bundle
+// gets its own module-level Map and extensions never see paired remote nodes.
+const REMOTE_SKILLS_STATE_KEY = Symbol.for("openclaw.remoteSkillsState");
+
+type RemoteSkillsState = {
+  nodes: Map<string, RemoteNodeRecord>;
+  registry: NodeRegistry | null;
+};
+
+const remoteSkillsState = resolveGlobalSingleton<RemoteSkillsState>(
+  REMOTE_SKILLS_STATE_KEY,
+  () => ({ nodes: new Map(), registry: null }),
+);
+
+const remoteNodes = remoteSkillsState.nodes;
 
 function describeNode(nodeId: string): string {
   const record = remoteNodes.get(nodeId);
@@ -124,7 +140,7 @@ function upsertNode(record: {
 }
 
 export function setSkillsRemoteRegistry(registry: NodeRegistry | null) {
-  remoteRegistry = registry;
+  remoteSkillsState.registry = registry;
 }
 
 export async function primeRemoteSkillsCache() {
@@ -246,7 +262,7 @@ export async function refreshRemoteNodeBins(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
 }) {
-  if (!remoteRegistry) {
+  if (!remoteSkillsState.registry) {
     return;
   }
   if (!isMacPlatform(params.platform, params.deviceFamily)) {
@@ -272,7 +288,7 @@ export async function refreshRemoteNodeBins(params: {
 
   try {
     const binsList = [...requiredBins];
-    const res = await remoteRegistry.invoke(
+    const res = await remoteSkillsState.registry.invoke(
       canWhich
         ? {
             nodeId: params.nodeId,
@@ -335,10 +351,10 @@ export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] |
 }
 
 export async function refreshRemoteBinsForConnectedNodes(cfg: OpenClawConfig) {
-  if (!remoteRegistry) {
+  if (!remoteSkillsState.registry) {
     return;
   }
-  const connected = remoteRegistry.listConnected();
+  const connected = remoteSkillsState.registry.listConnected();
   for (const node of connected) {
     await refreshRemoteNodeBins({
       nodeId: node.nodeId,
