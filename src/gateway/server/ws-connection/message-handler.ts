@@ -15,7 +15,7 @@ import {
   updatePairedDeviceMetadata,
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
-import { updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
+import { ensurePairedNode, updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -1016,11 +1016,25 @@ export function attachGatewayWsMessageHandler(params: {
           if (instanceId) {
             nodeIdsForPairing.add(instanceId);
           }
+          // Ensure a node pairing entry exists in nodes/paired.json for each
+          // node ID. Previously, only updatePairedNodeMetadata was called here,
+          // which silently returned when the entry was missing — causing bin
+          // probe results to never persist and remote skills to stay ineligible.
           for (const nodeId of nodeIdsForPairing) {
-            void updatePairedNodeMetadata(nodeId, {
-              lastConnectedAtMs: nodeSession.connectedAtMs,
+            void ensurePairedNode(nodeId, {
+              displayName: nodeSession.displayName,
+              platform: nodeSession.platform,
+              version: nodeSession.version,
+              coreVersion: nodeSession.coreVersion,
+              uiVersion: nodeSession.uiVersion,
+              deviceFamily: nodeSession.deviceFamily,
+              modelIdentifier: nodeSession.modelIdentifier,
+              remoteIp: nodeSession.remoteIp,
+              caps: nodeSession.caps,
+              commands: nodeSession.commands,
+              permissions: nodeSession.permissions,
             }).catch((err) =>
-              logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
+              logGateway.warn(`failed to ensure node pairing for ${nodeId}: ${formatForLog(err)}`),
             );
           }
           recordRemoteNodeInfo({

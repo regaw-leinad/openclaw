@@ -214,6 +214,86 @@ export async function verifyNodeToken(
   return verifyPairingToken(token, node.token) ? { ok: true, node } : { ok: false };
 }
 
+/**
+ * Ensure a paired node entry exists for the given nodeId.
+ * If the entry already exists, updates it with the provided metadata.
+ * If it does not exist, creates a new entry.
+ *
+ * This is called when an authenticated node connects to the gateway so that
+ * the node pairing store (`nodes/paired.json`) stays in sync with the device
+ * pairing store. Without this, bin probe results from `refreshRemoteNodeBins`
+ * silently fail to persist because `updatePairedNodeMetadata` returns early
+ * when the node entry is missing.
+ */
+export async function ensurePairedNode(
+  nodeId: string,
+  metadata: {
+    displayName?: string;
+    platform?: string;
+    version?: string;
+    coreVersion?: string;
+    uiVersion?: string;
+    deviceFamily?: string;
+    modelIdentifier?: string;
+    remoteIp?: string;
+    caps?: string[];
+    commands?: string[];
+    permissions?: Record<string, boolean>;
+  },
+  baseDir?: string,
+): Promise<{ created: boolean }> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeNodeId(nodeId);
+    const existing = state.pairedByNodeId[normalized];
+    if (existing) {
+      // Update metadata fields if the entry already exists
+      const next: NodePairingPairedNode = {
+        ...existing,
+        displayName: metadata.displayName ?? existing.displayName,
+        platform: metadata.platform ?? existing.platform,
+        version: metadata.version ?? existing.version,
+        coreVersion: metadata.coreVersion ?? existing.coreVersion,
+        uiVersion: metadata.uiVersion ?? existing.uiVersion,
+        deviceFamily: metadata.deviceFamily ?? existing.deviceFamily,
+        modelIdentifier: metadata.modelIdentifier ?? existing.modelIdentifier,
+        remoteIp: metadata.remoteIp ?? existing.remoteIp,
+        caps: metadata.caps ?? existing.caps,
+        commands: metadata.commands ?? existing.commands,
+        permissions: metadata.permissions ?? existing.permissions,
+        lastConnectedAtMs: Date.now(),
+      };
+      state.pairedByNodeId[normalized] = next;
+      await persistState(state, baseDir);
+      return { created: false };
+    }
+
+    // Create a new entry for this node
+    const now = Date.now();
+    const node: NodePairingPairedNode = {
+      nodeId: normalized,
+      token: newToken(),
+      displayName: metadata.displayName,
+      platform: metadata.platform,
+      version: metadata.version,
+      coreVersion: metadata.coreVersion,
+      uiVersion: metadata.uiVersion,
+      deviceFamily: metadata.deviceFamily,
+      modelIdentifier: metadata.modelIdentifier,
+      remoteIp: metadata.remoteIp,
+      caps: metadata.caps,
+      commands: metadata.commands,
+      permissions: metadata.permissions,
+      createdAtMs: now,
+      approvedAtMs: now,
+      lastConnectedAtMs: now,
+    };
+    state.pairedByNodeId[normalized] = node;
+    await persistState(state, baseDir);
+    return { created: true };
+  });
+}
+
 export async function updatePairedNodeMetadata(
   nodeId: string,
   patch: Partial<Omit<NodePairingPairedNode, "nodeId" | "token" | "createdAtMs" | "approvedAtMs">>,
